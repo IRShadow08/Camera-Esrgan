@@ -13,6 +13,8 @@ import io
 import re
 from embeddings_train import generate_embeddings
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 class CameraApp:
@@ -49,7 +51,6 @@ class CameraApp:
         self.train_button = ttk.Button(self.camera_tab, text="Train Faces", command=self.train_faces)
         self.train_button.pack(pady=5)
 
-
         # Recognition Tab
         self.fr_tab = ttk.Frame(self.tabs)
         self.tabs.add(self.fr_tab, text="Live Recognition")
@@ -62,7 +63,7 @@ class CameraApp:
 
         self.cap = cv2.VideoCapture(0)
         self.frame = None
-        os.makedirs("Deepface DB", exist_ok=True)
+        os.makedirs(os.path.join(BASE_DIR, "Deepface DB"), exist_ok=True)
 
         self.db_integration = DatabaseIntegration()
 
@@ -80,8 +81,8 @@ class CameraApp:
         ttk.Button(self.delete_tab, text="Load Courses", command=self.load_courses).pack(pady=5)
         ttk.Button(self.delete_tab, text="Delete Images", command=self.delete_images_from_tab).pack(pady=5)
 
-        os.makedirs("Deepface DB Record", exist_ok=True)
-        os.makedirs("Deepface DB Frame", exist_ok=True)
+        os.makedirs(os.path.join(BASE_DIR, "Deepface DB Record"), exist_ok=True)
+        os.makedirs(os.path.join(BASE_DIR, "Deepface DB Frame"), exist_ok=True)
 
         self.update_frame()
 
@@ -90,7 +91,7 @@ class CameraApp:
         if not name:
             messagebox.showwarning("Missing name", "Please enter a name.")
             return
-        folder_path = os.path.join("Deepface DB", name)
+        folder_path = os.path.join(BASE_DIR, "Deepface DB", name)
         os.makedirs(folder_path, exist_ok=True)
         filename = f"img{len(os.listdir(folder_path))+1:03}.jpg"
         filepath = os.path.join(folder_path, filename)
@@ -111,7 +112,7 @@ class CameraApp:
                 name = "Detecting..."
                 try:
                     face_img = frame[y:y+h, x:x+w]
-                    temp_path = "temp.jpg"
+                    temp_path = os.path.join(BASE_DIR, "temp.jpg")
                     cv2.imwrite(temp_path, face_img)
                     emb = DeepFace.represent(img_path=temp_path, model_name="Facenet512", enforce_detection=False)[0]["embedding"]
 
@@ -128,7 +129,7 @@ class CameraApp:
                                 min_dist = dist
                                 name = person
 
-                    if name != "unknown" and min_dist < 0.18 and name not in self.logged_names: # Set to 0.18 for as average accuracy thats mostly accurate
+                    if name != "unknown" and min_dist < 0.18 and name not in self.logged_names:
                         self.logged_names.add(name)
                         timestamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -138,7 +139,7 @@ class CameraApp:
                         date_part, time_part = timestamp.split(" ")
                         clean_date = re.sub(r'\D', '', date_part)
                         clean_time = re.sub(r'\D', '', time_part)
-                        img_path = os.path.join("Deepface DB Record", f"{name}_{clean_date}_{clean_time}_face.jpg")
+                        img_path = os.path.join(BASE_DIR, "Deepface DB Record", f"{name}_{clean_date}_{clean_time}_face.jpg")
 
                         cv2.imwrite(img_path, face_img)
 
@@ -181,10 +182,8 @@ class CameraApp:
                 return
 
         try:
-            # Generate the model and save to model.joblib
             model_path = generate_embeddings()
 
-            # Upload the trained model to the database
             success = self.db_integration.upload_model_to_course(course_id, model_path)
             if success:
                 messagebox.showinfo("Success", "Model uploaded successfully.")
@@ -194,7 +193,7 @@ class CameraApp:
             messagebox.showerror("Error", f"Training failed:\n{str(e)}")
 
     def delete_images_from_tab(self):
-        db_folder = "Deepface DB"
+        db_folder = os.path.join(BASE_DIR, "Deepface DB")
         if not os.path.exists(db_folder):
             messagebox.showerror("Error", "Deepface DB folder not found.")
             return
@@ -238,18 +237,16 @@ class CameraApp:
             messagebox.showerror("Error", "No courses found or failed to fetch.")
             return
 
-        # For all courses (add to db tab)
         upload_values = [
             f"{c['name']} by {c['teacher_name']} (ID: {c['id']})"
             for c in self.db_integration.courses
         ]
         self.upload_course_combo['values'] = upload_values
 
-        # For courses with models only (live recognition tab)
         recognition_values = [
             f"{c['name']} by {c['teacher_name']} (ID: {c['id']})"
             for c in self.db_integration.courses
-            if c.get('model_pickle')  # model_pickle not empty string
+            if c.get('model_pickle')
         ]
         self.course_combo['values'] = recognition_values
 
@@ -324,7 +321,6 @@ class DatabaseIntegration:
 
         return False
 
-
     def load_model_from_bytea(self, bytea_data):
         if isinstance(bytea_data, str):
             first_pass = bytes.fromhex(bytea_data)
@@ -343,7 +339,7 @@ class DatabaseIntegration:
         date_part, time_part = timestamp.split(" ")
         clean_date = re.sub(r'\D', '', date_part)
         clean_time = re.sub(r'\D', '', time_part)
-        image_path = f"Deepface DB Record/{student_name}_{clean_date}_{clean_time}_face.jpg"
+        image_path = os.path.join(BASE_DIR, "Deepface DB Record", f"{student_name}_{clean_date}_{clean_time}_face.jpg")
 
         if not os.path.exists(image_path):
             return False

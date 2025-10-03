@@ -2,12 +2,17 @@ from deepface import DeepFace
 import os
 import joblib
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def generate_embeddings(model_name="Facenet512", db_dir="Deepface DB"):
-    output_filename = "model.joblib"
+    db_path = os.path.join(BASE_DIR, db_dir)
+    output_filename = os.path.join(BASE_DIR, "model.joblib")
     embeddings_db = {}
 
-    for person in os.listdir(db_dir):
-        person_path = os.path.join(db_dir, person)
+    for person in os.listdir(db_path):
+        person_path = os.path.join(db_path, person)
+        if not os.path.isdir(person_path):
+            continue
         for img_file in os.listdir(person_path):
             img_path = os.path.join(person_path, img_file)
             embedding = DeepFace.represent(
