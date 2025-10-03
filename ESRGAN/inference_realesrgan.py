@@ -1,180 +1,166 @@
-import os
+import argparse
 import cv2
 import glob
-import shutil
-import time
-import re
-import argparse
-import matplotlib.pyplot as plt
-
+import os
 from basicsr.archs.rrdbnet_arch import RRDBNet
-from basicsr.archs.srvgg_arch import SRVGGNetCompact
 from basicsr.utils.download_util import load_file_from_url
+
 from realesrgan import RealESRGANer
-from gfpgan import GFPGANer
+from realesrgan.archs.srvgg_arch import SRVGGNetCompact
 
-# ----------------- Helpers -----------------
-def natural_sort(l):
-    return sorted(l, key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
 
-def display(orig, restored):
-    fig = plt.figure(figsize=(20, 10))
-    ax1 = fig.add_subplot(1,2,1)
-    ax1.imshow(orig)
-    ax1.set_title("Original")
-    ax1.axis("off")
-    ax2 = fig.add_subplot(1,2,2)
-    ax2.imshow(restored)
-    ax2.set_title("Restored")
-    ax2.axis("off")
-    plt.show()
-
-def imread_rgb(path):
-    img = cv2.imread(path)
-    if img is None:
-        raise FileNotFoundError(f"Cannot read {path}")
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-# ----------------- Main -----------------
 def main():
+    """Inference demo for Real-ESRGAN.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input', type=str, default='ESRGAN/input', help='Input image or folder')
-    parser.add_argument('-o', '--output', type=str, default='ESRGAN/output', help='Output folder')
-    parser.add_argument('--face_enhance', action='store_true', help='Use GFPGAN to enhance faces')
-    parser.add_argument('--fp32', action='store_true', help='Use fp32 precision')
-    parser.add_argument('--outscale', type=float, default=4, help='Upscaling factor')
-    parser.add_argument('--suffix', type=str, default='out', help='Suffix of output images')
-    parser.add_argument('--tile', type=int, default=0, help='Tile size for ESRGAN')
-    parser.add_argument('--tile_pad', type=int, default=10, help='Tile padding for ESRGAN')
-    parser.add_argument('--pre_pad', type=int, default=0, help='Pre padding for ESRGAN')
-    parser.add_argument('--model_name', type=str, default='RealESRGAN_x4plus', help='ESRGAN model')
-    parser.add_argument('--denoise_strength', type=float, default=0.5, help='Denoise strength for x4v3 model')
-    parser.add_argument('--gpu_id', type=int, default=None, help='GPU id')
+    parser.add_argument('-i', '--input', type=str, default='inputs', help='Input image or folder')
+    parser.add_argument(
+        '-n',
+        '--model_name',
+        type=str,
+        default='RealESRGAN_x4plus',
+        help=('Model names: RealESRGAN_x4plus | RealESRNet_x4plus | RealESRGAN_x4plus_anime_6B | RealESRGAN_x2plus | '
+              'realesr-animevideov3 | realesr-general-x4v3'))
+    parser.add_argument('-o', '--output', type=str, default='results', help='Output folder')
+    parser.add_argument(
+        '-dn',
+        '--denoise_strength',
+        type=float,
+        default=0.5,
+        help=('Denoise strength. 0 for weak denoise (keep noise), 1 for strong denoise ability. '
+              'Only used for the realesr-general-x4v3 model'))
+    parser.add_argument('-s', '--outscale', type=float, default=4, help='The final upsampling scale of the image')
+    parser.add_argument(
+        '--model_path', type=str, default=None, help='[Option] Model path. Usually, you do not need to specify it')
+    parser.add_argument('--suffix', type=str, default='out', help='Suffix of the restored image')
+    parser.add_argument('-t', '--tile', type=int, default=0, help='Tile size, 0 for no tile during testing')
+    parser.add_argument('--tile_pad', type=int, default=10, help='Tile padding')
+    parser.add_argument('--pre_pad', type=int, default=0, help='Pre padding size at each border')
+    parser.add_argument('--face_enhance', action='store_true', help='Use GFPGAN to enhance face')
+    parser.add_argument(
+        '--fp32', action='store_true', help='Use fp32 precision during inference. Default: fp16 (half precision).')
+    parser.add_argument(
+        '--alpha_upsampler',
+        type=str,
+        default='realesrgan',
+        help='The upsampler for the alpha channels. Options: realesrgan | bicubic')
+    parser.add_argument(
+        '--ext',
+        type=str,
+        default='auto',
+        help='Image extension. Options: auto | jpg | png, auto means using the same extension as inputs')
+    parser.add_argument(
+        '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
+
     args = parser.parse_args()
 
-    # ----------------- Paths -----------------
-    project_root = os.path.dirname(os.path.abspath(__file__))
-    input_dir = os.path.abspath(args.input)
-    output_dir = os.path.abspath(args.output)
-    resized_dir = os.path.join(project_root, "ESRGAN/resized_temp")
-    esrgan_dir = os.path.join(project_root, "ESRGAN/esrgan_raw")
-    weights_dir = os.path.join(project_root, "ESRGAN/weights")
-
-    os.makedirs(input_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(resized_dir, exist_ok=True)
-    os.makedirs(esrgan_dir, exist_ok=True)
-    os.makedirs(weights_dir, exist_ok=True)
-
-    # ----------------- Input check -----------------
-    input_list = natural_sort(glob.glob(os.path.join(input_dir, '*')))
-    if not input_list:
-        print(f"No input images in {input_dir}")
-        return
-
-    # ----------------- Store original sizes -----------------
-    original_sizes = {}
-    resized_list = []
-    for img_path in input_list:
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Cannot read {img_path}, skipping.")
-            continue
-        h, w = img.shape[:2]
-        original_sizes[os.path.basename(img_path)] = (w, h)
-        resized = cv2.resize(img, (100, 100), interpolation=cv2.INTER_AREA)
-        resized_path = os.path.join(resized_dir, os.path.basename(img_path))
-        cv2.imwrite(resized_path, resized)
-        resized_list.append(resized_path)
-
-    # ----------------- ESRGAN model -----------------
-    model_name = args.model_name.split('.')[0]
-    if model_name == 'RealESRGAN_x4plus':
+    # determine models according to model names
+    args.model_name = args.model_name.split('.')[0]
+    if args.model_name == 'RealESRGAN_x4plus':  # x4 RRDBNet model
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
         netscale = 4
         file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth']
-    elif model_name == 'RealESRNet_x4plus':
+    elif args.model_name == 'RealESRNet_x4plus':  # x4 RRDBNet model
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
         netscale = 4
         file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth']
-    elif model_name == 'RealESRGAN_x2plus':
+    elif args.model_name == 'RealESRGAN_x4plus_anime_6B':  # x4 RRDBNet model with 6 blocks
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=6, num_grow_ch=32, scale=4)
+        netscale = 4
+        file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth']
+    elif args.model_name == 'RealESRGAN_x2plus':  # x2 RRDBNet model
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
         netscale = 2
         file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth']
+    elif args.model_name == 'realesr-animevideov3':  # x4 VGG-style model (XS size)
+        model = SRVGGNetCompact(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=16, upscale=4, act_type='prelu')
+        netscale = 4
+        file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth']
+    elif args.model_name == 'realesr-general-x4v3':  # x4 VGG-style model (S size)
+        model = SRVGGNetCompact(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32, upscale=4, act_type='prelu')
+        netscale = 4
+        file_url = [
+            'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth',
+            'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth'
+        ]
+
+    # determine model paths
+    if args.model_path is not None:
+        model_path = args.model_path
     else:
-        raise ValueError(f"Model {model_name} not supported in this script")
+        model_path = os.path.join('weights', args.model_name + '.pth')
+        if not os.path.isfile(model_path):
+            ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+            for url in file_url:
+                # model_path will be updated
+                model_path = load_file_from_url(
+                    url=url, model_dir=os.path.join(ROOT_DIR, 'weights'), progress=True, file_name=None)
 
-    model_path = os.path.join(weights_dir, model_name + '.pth')
-    if not os.path.isfile(model_path):
-        model_path = load_file_from_url(url=file_url[0], model_dir=weights_dir, progress=True, file_name=model_name + '.pth')
+    # use dni to control the denoise strength
+    dni_weight = None
+    if args.model_name == 'realesr-general-x4v3' and args.denoise_strength != 1:
+        wdn_model_path = model_path.replace('realesr-general-x4v3', 'realesr-general-wdn-x4v3')
+        model_path = [model_path, wdn_model_path]
+        dni_weight = [args.denoise_strength, 1 - args.denoise_strength]
 
+    # restorer
     upsampler = RealESRGANer(
         scale=netscale,
         model_path=model_path,
+        dni_weight=dni_weight,
         model=model,
         tile=args.tile,
         tile_pad=args.tile_pad,
         pre_pad=args.pre_pad,
         half=not args.fp32,
-        gpu_id=args.gpu_id
-    )
+        gpu_id=args.gpu_id)
 
-    # ----------------- GFPGAN model -----------------
-    if args.face_enhance:
-        gfpgan_model_path = os.path.join(weights_dir, "GFPGANv1.3.pth")
-        if not os.path.isfile(gfpgan_model_path):
-            gfpgan_model_path = load_file_from_url(
-                url="https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth",
-                model_dir=weights_dir,
-                progress=True,
-                file_name="GFPGANv1.3.pth"
-            )
+    if args.face_enhance:  # Use GFPGAN for face enhancement
+        from gfpgan import GFPGANer
         face_enhancer = GFPGANer(
-            model_path=gfpgan_model_path,
+            model_path='https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth',
             upscale=args.outscale,
             arch='clean',
             channel_multiplier=2,
-            bg_upsampler=upsampler
-        )
+            bg_upsampler=upsampler)
+    os.makedirs(args.output, exist_ok=True)
 
-    # ----------------- Run ESRGAN & Restore -----------------
-    start_time = time.time()
-    esrgan_list = []
+    if os.path.isfile(args.input):
+        paths = [args.input]
+    else:
+        paths = sorted(glob.glob(os.path.join(args.input, '*')))
 
-    for img_path in resized_list:
-        img = cv2.imread(img_path)
-        output, _ = upsampler.enhance(img, outscale=args.outscale)
-        esrgan_path = os.path.join(esrgan_dir, os.path.basename(img_path))
-        cv2.imwrite(esrgan_path, output)
-        esrgan_list.append(esrgan_path)
+    for idx, path in enumerate(paths):
+        imgname, extension = os.path.splitext(os.path.basename(path))
+        print('Testing', idx, imgname)
 
-    # Restore to original sizes and apply GFPGAN if enabled
-    for orig_path, esr_path in zip(input_list, esrgan_list):
-        orig_img = imread_rgb(orig_path)
-        esrgan_img = cv2.imread(esr_path)
-        w, h = original_sizes[os.path.basename(orig_path)]
-        esrgan_resized = cv2.resize(esrgan_img, (w, h), interpolation=cv2.INTER_CUBIC)
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if len(img.shape) == 3 and img.shape[2] == 4:
+            img_mode = 'RGBA'
+        else:
+            img_mode = None
 
-        # Face enhance if enabled
-        if args.face_enhance:
-            _, _, esrgan_resized = face_enhancer.enhance(esrgan_resized, has_aligned=False, only_center_face=False, paste_back=True)
-
-        save_name = os.path.basename(orig_path).split('.')[0] + f"_{args.suffix}.png"
-        save_path = os.path.join(output_dir, save_name)
-        cv2.imwrite(save_path, esrgan_resized)
-
-        # Optional display
-        display(orig_img, cv2.cvtColor(esrgan_resized, cv2.COLOR_BGR2RGB))
-
-    # Cleanup
-    for temp_dir in [resized_dir, esrgan_dir]:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-
-    end_time = time.time()
-    print(f"\n✅ Done! Outputs saved in: {output_dir}")
-    print(f"Processed {len(input_list)} images in {end_time - start_time:.2f}s")
+        try:
+            if args.face_enhance:
+                _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
+            else:
+                output, _ = upsampler.enhance(img, outscale=args.outscale)
+        except RuntimeError as error:
+            print('Error', error)
+            print('If you encounter CUDA out of memory, try to set --tile with a smaller number.')
+        else:
+            if args.ext == 'auto':
+                extension = extension[1:]
+            else:
+                extension = args.ext
+            if img_mode == 'RGBA':  # RGBA images should be saved in png format
+                extension = 'png'
+            if args.suffix == '':
+                save_path = os.path.join(args.output, f'{imgname}.{extension}')
+            else:
+                save_path = os.path.join(args.output, f'{imgname}_{args.suffix}.{extension}')
+            cv2.imwrite(save_path, output)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

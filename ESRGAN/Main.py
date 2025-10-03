@@ -12,11 +12,12 @@ def natural_sort(l):
     return sorted(l, key=lambda x: [int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
 
 # Define paths
-input_dir = os.path.join(os.getcwd(), "ESRGAN", "input")
-resized_dir = os.path.join(os.getcwd(), "ESRGAN", "resized_temp")  # temp resized folder
-esrgan_dir = os.path.join(os.getcwd(), "ESRGAN", "esrgan_raw")    # ESRGAN raw output
-output_dir = os.path.join(os.getcwd(), "ESRGAN", "output")        # final restored output
-real_esrgan_script = os.path.join(os.getcwd(), "ESRGAN", "inference_realesrgan.py")
+base_esrgan_dir = os.path.join(os.getcwd(), "ESRGAN")
+input_dir = os.path.join(base_esrgan_dir, "input")
+resized_dir = os.path.join(base_esrgan_dir, "resized_temp")  # temp resized folder
+esrgan_dir = os.path.join(base_esrgan_dir, "esrgan_raw")    # ESRGAN raw output
+output_dir = os.path.join(base_esrgan_dir, "output")        # final restored output
+real_esrgan_script = os.path.join(base_esrgan_dir, "inference_realesrgan.py") 
 
 # Ensure directories exist
 os.makedirs(input_dir, exist_ok=True)
