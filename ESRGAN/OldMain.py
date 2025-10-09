@@ -18,14 +18,12 @@ resized_dir = os.path.join(base_esrgan_dir, "resized_temp")  # temp resized fold
 esrgan_dir = os.path.join(base_esrgan_dir, "esrgan_raw")    # ESRGAN raw output
 output_dir = os.path.join(base_esrgan_dir, "output")        # final restored output
 real_esrgan_script = os.path.join(base_esrgan_dir, "inference_realesrgan.py") 
-compare_dir = os.path.join(base_esrgan_dir, "Compare")
 
 # Ensure directories exist
 os.makedirs(input_dir, exist_ok=True)
 os.makedirs(resized_dir, exist_ok=True)
 os.makedirs(esrgan_dir, exist_ok=True)
 os.makedirs(output_dir, exist_ok=True)
-os.makedirs(compare_dir, exist_ok=True)
 
 # Check input
 input_list = natural_sort(glob.glob(os.path.join(input_dir, '*')))
@@ -81,7 +79,7 @@ def imread(img_path):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 # Display helper
-def display(img1, img2, save_path):
+def display(img1, img2):
     fig = plt.figure(figsize=(25, 10))
     ax1 = fig.add_subplot(1, 2, 1)
     plt.title('Original Input', fontsize=16)
@@ -91,10 +89,7 @@ def display(img1, img2, save_path):
     ax2.axis('off')
     ax1.imshow(img1)
     ax2.imshow(img2)
-
-    plt.savefig(save_path)
-    plt.close(fig)
-
+    plt.show()
 
 # Restore ESRGAN output back to original size & save
 for input_path, esrgan_path in zip(input_list, esrgan_list):
@@ -114,10 +109,9 @@ for input_path, esrgan_path in zip(input_list, esrgan_list):
 
     # Convert to RGB for display
     esrgan_rgb = cv2.cvtColor(esrgan_resized, cv2.COLOR_BGR2RGB)
-    compare_path = os.path.join(compare_dir, f"compare_{os.path.basename(input_path)}")
-    display(orig_img, esrgan_rgb, compare_path)
+    display(orig_img, esrgan_rgb)
 
-print(f"\nFinal outputs restored to original sizes are saved in: {output_dir}")
+print(f"\n✅ Final outputs restored to original sizes are saved in: {output_dir}")
 print(f"Total processed images: {len(input_list)}")
 print(f"Processing time: {elapsed_time:.2f} seconds")
 
